@@ -2000,14 +2000,13 @@ static void noinline volume_space(void)
 /* Wait 50ms for 2-button press. */
 static uint8_t wait_twobutton_press(uint8_t b)
 {
-    unsigned int wait;
+    time_t t = time_now();
 
-    for (wait = 0; wait < 50; wait++) {
+    while (time_since(t) < time_ms(50)) {
         if ((buttons & (B_LEFT|B_RIGHT)) == (B_LEFT|B_RIGHT))
             b = B_SELECT;
         if (b & B_SELECT)
             break;
-        delay_ms(1);
     }
 
     return b;
@@ -2015,6 +2014,7 @@ static uint8_t wait_twobutton_press(uint8_t b)
 
 static uint8_t menu_wait_button(bool_t twobutton_eject, const char *led_msg)
 {
+    time_t t = time_now();
     unsigned int wait = 0;
     uint8_t b;
 
@@ -2022,8 +2022,10 @@ static uint8_t menu_wait_button(bool_t twobutton_eject, const char *led_msg)
     while ((b = buttons) == 0) {
         /* Bail if USB disconnects. */
         assert_volume_connected();
-        /* Update the display. */
-        delay_ms(1);
+        /* Update the display every 1ms. */
+        if (time_since(t) < time_ms(1))
+            continue;
+        t += time_ms(1);
         switch (display_mode) {
         case DM_LED_7SEG:
             /* Alternate the 7-segment display. */
@@ -2230,7 +2232,7 @@ static uint8_t noinline eject_menu(uint8_t b)
     };
 
     char msg[17];
-    unsigned int wait;
+    time_t t;
     int sel = 0;
     bool_t twobutton_eject =
         ((ff_cfg.twobutton_action & TWOBUTTON_mask) == TWOBUTTON_eject)
@@ -2267,12 +2269,12 @@ static uint8_t noinline eject_menu(uint8_t b)
         }
 
         /* Wait for buttons to be released. */
-        wait = 0;
+        t = time_now();
         while (buttons != 0) {
-            delay_ms(1);
-            if ((display_mode != DM_LCD_OLED) && (wait++ >= 2000)) {
+            if ((display_mode != DM_LCD_OLED)
+                && (time_since(t) > time_ms(2000))) {
             toggle_wp:
-                wait = 0;
+                t = time_now();
                 cfg.slot.attributes ^= AM_RDO;
                 if (volume_readonly()) {
                     /* Read-only filesystem: force AM_RDO always. */
@@ -2296,15 +2298,15 @@ static uint8_t noinline eject_menu(uint8_t b)
 
         if (b & B_SELECT) {
             /* Wait for eject button to be released. */
-            wait = 0;
+            t = time_now();
             while (b & B_SELECT) {
                 b = buttons;
                 if (twobutton_eject && b) {
                     /* Wait for 2-button release. */
                     b = B_SELECT;
                 }
-                delay_ms(1);
-                if ((display_mode != DM_LCD_OLED) && (wait++ >= 2000))
+                if ((display_mode != DM_LCD_OLED)
+                    && (time_since(t) > time_ms(2000)))
                     goto toggle_wp;
             }
             /* LED display: No menu, we exit straight out. */
@@ -2486,6 +2488,7 @@ static int floppy_main(void *unused)
         lcd_scroll.off = lcd_scroll.end = 0;
         do {
             unsigned int wait_ms;
+            time_t t;
 
             /* While buttons are pressed we poll them and update current image
              * accordingly. */
@@ -2508,20 +2511,24 @@ static int floppy_main(void *unused)
                 scroll_ms += lcd_scroll.end * ff_cfg.nav_scroll_rate;
                 wait_ms = max(wait_ms, scroll_ms);
             }
-            for (i = 0; (wait_ms == 0) || (i < wait_ms); i++) {
+            t = time_now();
+            i = 0;
+            while (i < wait_ms) {
                 b = buttons;
                 if (b != 0)
                     break;
                 assert_volume_connected();
-                delay_ms(1);
-                lcd_scroll.ticks -= time_ms(1);
-                lcd_scroll_name();
+                if (time_since(t) >= time_ms(1)) {
+                    t += time_ms(1);
+                    i += 1;
+                    lcd_scroll.ticks -= time_ms(1);
+                    lcd_scroll_name();
+                }
             }
 
             /* Wait for select button to be released. */
-            for (i = 0; !cfg.ejected && ((b = buttons) & B_SELECT); i++) {
-                delay_ms(1);
-                if (i >= 2000)
+            while (!cfg.ejected && ((b = buttons) & B_SELECT)) {
+                if (time_since(t) >= 2000)
                     cfg.ejected = TRUE;
             }
 
@@ -2724,16 +2731,17 @@ static void banner(void)
 
 static void check_buttons(void)
 {
-    unsigned int i;
     uint8_t b = buttons;
+    time_t t;
 
     /* Need both LEFT and RIGHT pressed, or SELECT alone. */
     if ((b != (B_LEFT|B_RIGHT)) && (b != B_SELECT))
         return;
 
     /* Buttons must be continuously pressed for three seconds. */
-    for (i = 0; (i < 3000) && (buttons == b); i++)
-        delay_ms(1);
+    t = time_now();
+    while ((time_since(t) < time_ms(3000)) && (buttons == b))
+        continue;
 
     if (buttons == b)
         factory_reset();
